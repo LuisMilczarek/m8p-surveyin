@@ -1,9 +1,13 @@
 #!/usr/bin/env python
+import json
 import argparse
+import numpy as np
 from serial import Serial
 from pynmeagps import NMEAMessage
+# from time import perf_counter, sleep
 from pyubx2 import UBXReader, UBXMessage, NMEA_PROTOCOL, UBX_PROTOCOL, SET, POLL
-from time import perf_counter, sleep
+from enum import Enum
+import time
 
 class Ports():
     I2C   = 0
@@ -31,6 +35,11 @@ class TMODE3FLAGS():
     SURVEY_IN = 1
     FIXED_MODE = 2
 
+class SVINSTATE(Enum):
+    STARTING = 1
+    RUNNING = 2
+    DONE = 3
+
 
 def createCfgPrt(target,baudrate, inUBX=1,inNMEA=0, inRTCM=0, inRTCM3=1,
                  outUBX=1, outNMEA=1, outRTCM=0, outRTCM3=1) -> UBXMessage:
@@ -45,9 +54,32 @@ def createCfgMsg(msgClass, msgID, rateUART1=0, rateUART2=0,rateUSB=0,rateSPI=0) 
                      )
     return msg
 
-def createCfgTModeMsg(rcvrMode, svinMinDur=60000, svinAccLimit=10000) -> UBXMessage:
-    msg = UBXMessage("CFG","CFG-TMODE3",SET,rcvrMode=rcvrMode,svinMinDur=svinMinDur,svinAccLimit=svinAccLimit)
+def createCfgTModeMsg(rcvrMode, svinMinDur=60000, svinAccLimit=10000,
+                      ecefX=0, ecefY=0,ecefZ=0,
+                      ecefXHP=0, ecefYHP=0, ecefZHP=0, fixAcc=0) -> UBXMessage:
+
+    msg = UBXMessage("CFG","CFG-TMODE3",SET,rcvrMode=rcvrMode,svinMinDur=svinMinDur,svinAccLimit=svinAccLimit,
+                     ecefXOrLat=ecefX, ecefYOrLon=ecefY, ecefZOrAlt=ecefZ,
+                     ecefXOrLatHP=ecefXHP, ecefYOrLonHP=ecefYHP, ecefZOrAltHP=ecefZHP,
+                     fixedPosAcc=fixAcc)
     return msg
+
+def navSinToJson(msg : UBXMessage):
+    data = {}
+    data["ecefX"] = msg.meanX
+    data["ecefY"] = msg.meanY
+    data["ecefZ"] = msg.meanZ
+    data["ecefXHP"] = msg.meanXHP
+    data["ecefYHP"] = msg.meanYHP
+    data["ecefZHP"] = msg.meanZHP
+    data["fixAcc"] = msg.meanAcc
+
+    timestamp = time.strftime("%Y-%m-%d-%H-%M-%S")
+    file_name = f"{timestamp}.json"
+    with open(file_name) as f:
+        json.dump(data,f)
+
+    return
 
 def main()-> None:
 
@@ -79,16 +111,50 @@ def main()-> None:
                         help="Minimum accurary of survey in position. Unit: 0.1mm. Default: 10000."
                         )
     
-    args = parser.parse_args()
-    port = args.port
+    parser.add_argument("-f","--filename",
+                        default="",
+                        type=str,
+                        help="Input file with base data."
+                        )
+
+    
+    
+
+    args    = parser.parse_args()
+    port    = args.port
     min_dur = args.min_time
     min_acc = args.min_acc
+    ecefX   = 0
+    ecefY   = 0
+    ecefZ   = 0
+    ecefXHP = 0
+    ecefYHP = 0
+    ecefZHP = 0
+    fixACC  = 0
 
     if args.mode != "SVIN" and args.mode != "FIXED":
         print(f"Invalid mode, expected 'SVIN' or 'FIXED', got '{args.mode}'")
         return
+    
+    if args.mode == "FIXED":
+        if args.filename == "":
+            print("File must be explicit set when using fixed mode.")
+            return
+        with open(args.filename) as f:
+            data = json.load(f)
+            ecefX   = data["ecefX"]
+            ecefY   = data["ecefY"]
+            ecefZ   = data["ecefZ"]
+            ecefXHP = data["ecefXHP"]
+            ecefYHP = data["ecefYHP"]
+            ecefZHP = data["ecefZHP"]
+            fixACC  = data["fixAcc"] 
+    tmodeSetMSG = createCfgTModeMsg(TMODE3FLAGS.SURVEY_IN if args.mode == "SVIN" else TMODE3FLAGS.FIXED_MODE,svinMinDur=min_dur,svinAccLimit=min_acc,
+                                        ecefX=ecefX, ecefY=ecefY, ecefZ=ecefZ,
+                                        ecefXHP=ecefXHP, ecefYHP=ecefYHP, ecefZHP=ecefZHP,
+                                        fixAcc=fixACC)
 
-
+    state : SVINSTATE = SVINSTATE.STARTING
 
     with Serial(port, 115200, timeout=3) as stream:
         ubr = UBXReader(stream, protfilter=NMEA_PROTOCOL | UBX_PROTOCOL)
@@ -120,15 +186,26 @@ def main()-> None:
         r1230SetMSG = createCfgMsg(MSGClass.RTCM33, msgID=RTCM3MSG.R1230, rateUART1=10)
         stream.write(r1230SetMSG.serialize())
 
-        tmodeSetMSG = createCfgTModeMsg(TMODE3FLAGS.SURVEY_IN,svinMinDur=min_dur,svinAccLimit=min_acc)
+        tmodeSetMSG = createCfgTModeMsg(TMODE3FLAGS.SURVEY_IN if args.mode == "SVIN" else TMODE3FLAGS.FIXED_MODE,svinMinDur=min_dur,svinAccLimit=min_acc,
+                                        ecefX=ecefX, ecefY=ecefY, ecefZ=ecefZ,
+                                        ecefXHP=ecefXHP, ecefYHP=ecefYHP, ecefZHP=ecefZ,
+                                        fixAcc=fixACC)
         stream.write(tmodeSetMSG.serialize())
 
 
-        last = float("-inf")
+        # last = float("-inf")
         while True:
             _, parsed_data = ubr.read()
             if parsed_data is not None and not isinstance(parsed_data, NMEAMessage):
                 print(parsed_data)
+                if parsed_data.identity == "NAV-SVIN":
+                    match state:
+                        case SVINSTATE.STARTING:
+                            if parsed_data.active == 1:
+                                state = SVINSTATE.RUNNING
+                        case SVINSTATE.RUNNING:
+                            if parsed_data.active == 0:
+
                 # if isinstance(parsed_data,UBXMessage) and parsed_data.msg_id == "NAV-SVIN":
                 #     print("OI"*10E3)
             

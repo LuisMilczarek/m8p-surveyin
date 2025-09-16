@@ -76,13 +76,12 @@ def navSinToJson(msg : UBXMessage):
 
     timestamp = time.strftime("%Y-%m-%d-%H-%M-%S")
     file_name = f"{timestamp}.json"
-    with open(file_name) as f:
+    with open(file_name,"w") as f:
         json.dump(data,f)
 
     return
 
 def main()-> None:
-
     parser = argparse.ArgumentParser(
         prog="C94-M8P_Base",
         description="This program configures an C94-M8P board as a base, and starts survey in, or sets the fixed mode.",
@@ -148,7 +147,8 @@ def main()-> None:
             ecefXHP = data["ecefXHP"]
             ecefYHP = data["ecefYHP"]
             ecefZHP = data["ecefZHP"]
-            fixACC  = data["fixAcc"] 
+            fixACC  = data["fixAcc"]
+            
     tmodeSetMSG = createCfgTModeMsg(TMODE3FLAGS.SURVEY_IN if args.mode == "SVIN" else TMODE3FLAGS.FIXED_MODE,svinMinDur=min_dur,svinAccLimit=min_acc,
                                         ecefX=ecefX, ecefY=ecefY, ecefZ=ecefZ,
                                         ecefXHP=ecefXHP, ecefYHP=ecefYHP, ecefZHP=ecefZHP,
@@ -188,7 +188,7 @@ def main()-> None:
 
         tmodeSetMSG = createCfgTModeMsg(TMODE3FLAGS.SURVEY_IN if args.mode == "SVIN" else TMODE3FLAGS.FIXED_MODE,svinMinDur=min_dur,svinAccLimit=min_acc,
                                         ecefX=ecefX, ecefY=ecefY, ecefZ=ecefZ,
-                                        ecefXHP=ecefXHP, ecefYHP=ecefYHP, ecefZHP=ecefZ,
+                                        ecefXHP=ecefXHP, ecefYHP=ecefYHP, ecefZHP=ecefZHP,
                                         fixAcc=fixACC)
         stream.write(tmodeSetMSG.serialize())
 
@@ -205,7 +205,8 @@ def main()-> None:
                                 state = SVINSTATE.RUNNING
                         case SVINSTATE.RUNNING:
                             if parsed_data.active == 0:
-
+                                navSinToJson(parsed_data)
+                                state = SVINSTATE.DONE
                 # if isinstance(parsed_data,UBXMessage) and parsed_data.msg_id == "NAV-SVIN":
                 #     print("OI"*10E3)
             

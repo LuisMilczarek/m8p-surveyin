@@ -194,19 +194,27 @@ def main()-> None:
 
 
         # last = float("-inf")
-        while True:
-            _, parsed_data = ubr.read()
-            if parsed_data is not None and not isinstance(parsed_data, NMEAMessage):
-                print(parsed_data)
-                if parsed_data.identity == "NAV-SVIN":
-                    match state:
-                        case SVINSTATE.STARTING:
-                            if parsed_data.active == 1:
-                                state = SVINSTATE.RUNNING
-                        case SVINSTATE.RUNNING:
-                            if parsed_data.active == 0:
-                                navSinToJson(parsed_data)
-                                state = SVINSTATE.DONE
+        svin_msg = None
+
+        try:
+            while True:
+                _, parsed_data = ubr.read()
+                if parsed_data is not None and not isinstance(parsed_data, NMEAMessage):
+                    print(parsed_data)
+                    if parsed_data.identity == "NAV-SVIN":
+                        match state:
+                            case SVINSTATE.STARTING:
+                                if parsed_data.active == 1:
+                                    state = SVINSTATE.RUNNING
+                            case SVINSTATE.RUNNING:
+                                if parsed_data.active == 0:
+                                    navSinToJson(parsed_data)
+                                    state = SVINSTATE.DONE
+                                else:
+                                    svin_msg = parsed_data
+        except KeyboardInterrupt:
+            if state == SVINSTATE.RUNNING:
+                navSinToJson(parsed_data)
                 # if isinstance(parsed_data,UBXMessage) and parsed_data.msg_id == "NAV-SVIN":
                 #     print("OI"*10E3)
             
